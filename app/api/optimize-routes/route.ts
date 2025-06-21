@@ -2,8 +2,23 @@
 import { supabase } from "@/lib/supabaseClient";
 import { NextResponse } from "next/server";
 
+// --- (Type definitions and parseGeoJsonPoint function remain unchanged) ---
 type GeoJsonPoint = { type: "Point"; coordinates: [number, number] };
-
+type OrderItem = {
+  id: string;
+  order_id: string;
+  product_id: string;
+  quantity: number;
+};
+type PendingOrderFromDB = {
+  id: string;
+  customer_name: string;
+  delivery_address: string;
+  status: string;
+  created_at: string;
+  delivery_location: GeoJsonPoint;
+  order_items: OrderItem[];
+};
 function parseGeoJsonPoint(
   geoJson: GeoJsonPoint | null
 ): { lat: number; lng: number } | null {
@@ -13,6 +28,7 @@ function parseGeoJsonPoint(
 
 export async function POST(request: Request) {
   try {
+    // --- (All fetching and validation logic remains unchanged) ---
     const { warehouseId } = await request.json();
     if (!warehouseId)
       return NextResponse.json(
@@ -25,22 +41,26 @@ export async function POST(request: Request) {
       .single();
     if (!warehouseData)
       return NextResponse.json(
-        { error: `Warehouse with ID ${warehouseId} not found.` },
+        { error: `Warehouse not found.` },
         { status: 404 }
       );
     const warehouseLocation = parseGeoJsonPoint(warehouseData.location);
     if (!warehouseLocation)
       return NextResponse.json(
-        {
-          error: `Could not parse location for warehouse '${warehouseData.name}'.`,
-        },
+        { error: `Warehouse location invalid.` },
         { status: 500 }
       );
 
-    const { data: pendingOrders, error: ordersError } = await supabase.rpc(
+    const { data: pendingOrdersData, error: ordersError } = await supabase.rpc(
       "get_pending_orders_with_location"
     );
     if (ordersError) throw ordersError;
+    const pendingOrders: PendingOrderFromDB[] = pendingOrdersData || [];
+
+    if (pendingOrders.length === 0)
+      return NextResponse.json({
+        message: "No pending orders found by the database function.",
+      });
 
     const [partnersRes, stockRes, productsRes] = await Promise.all([
       supabase.from("delivery_partners").select("*"),
@@ -51,34 +71,37 @@ export async function POST(request: Request) {
       supabase.from("products").select("id, weight_kg"),
     ]);
 
-    const partners = partnersRes.data || [];
     const stock = stockRes.data || [];
-    const products = productsRes.data || [];
-
     const stockMap = new Map(stock.map((s) => [s.product_id, s.quantity]));
+    const partners = partnersRes.data || [];
+    const products = productsRes.data || [];
     const productWeightMap = new Map(products.map((p) => [p.id, p.weight_kg]));
 
-    const validOrders = (pendingOrders || [])
+    const validOrders = pendingOrders
       .map((order) => {
-        const isStockAvailable = order.order_items.every(
-          (item: any) => (stockMap.get(item.product_id) || 0) >= item.quantity
+        const items = order.order_items || [];
+        const isStockAvailable = items.every(
+          (item: OrderItem) =>
+            (stockMap.get(item.product_id) || 0) >= item.quantity
         );
         const location = parseGeoJsonPoint(order.delivery_location);
         if (isStockAvailable && location) {
-          const weight = order.order_items.reduce(
-            (sum: number, item: any) =>
+          const weight = items.reduce(
+            (sum: number, item: OrderItem) =>
               sum +
               (productWeightMap.get(item.product_id) || 0) * item.quantity,
             0
           );
-          return { ...order, location, weight };
+          return { ...order, location, weight, order_items: items };
         }
         return null;
       })
       .filter(Boolean);
 
     if (validOrders.length === 0)
-      return NextResponse.json({ message: "No fulfillable orders found." });
+      return NextResponse.json({
+        message: "No fulfillable orders found (check stock).",
+      });
 
     const vehicleLoads: { partner: any; orders: any[]; totalWeight: number }[] =
       partners.map((p) => ({ partner: p, orders: [], totalWeight: 0 }));
@@ -96,21 +119,12 @@ export async function POST(request: Request) {
     for (const vehicleLoad of vehicleLoads) {
       if (vehicleLoad.orders.length === 0) continue;
 
-      // --- FINAL, FINAL, CORRECTED GraphHopper Request Schema ---
+      // --- SIMPLIFIED GraphHopper Request ---
       const ghRequest = {
-        // The `locations` property is REMOVED from here.
-        vehicle_types: [
-          {
-            type_id: `${vehicleLoad.partner.vehicle_type || "truck"}_type`,
-            profile: "car",
-            capacity: [Math.floor(vehicleLoad.partner.max_capacity_kg)],
-          },
-        ],
+        // We removed `vehicle_types`
         vehicles: [
           {
             vehicle_id: vehicleLoad.partner.id,
-            type_id: `${vehicleLoad.partner.vehicle_type || "truck"}_type`,
-            // Coordinates are now defined directly inside the address objects
             start_address: {
               location_id: "warehouse",
               lon: warehouseLocation.lng,
@@ -121,19 +135,23 @@ export async function POST(request: Request) {
               lon: warehouseLocation.lng,
               lat: warehouseLocation.lat,
             },
+            // Capacity is not supported on the VRP vehicle object, so we leave it to our own logic.
           },
         ],
         services: vehicleLoad.orders.map((o: any) => ({
           id: o.id,
-          // Coordinates are now defined directly inside the address objects
           address: {
             location_id: o.id,
             lon: o.location.lng,
             lat: o.location.lat,
           },
-          duration: 300,
-          size: [Math.floor(o.weight)],
         })),
+        // The configuration to calculate points remains.
+        configuration: {
+          routing: {
+            calc_points: true,
+          },
+        },
       };
 
       const ghResponse = await fetch(
@@ -149,6 +167,8 @@ export async function POST(request: Request) {
       if (solution.solution) {
         routesCreated++;
         const route = solution.solution.routes[0];
+        console.log("--- Received Route from GraphHopper ---", route); // ADDED LOG
+
         const { data: routeData } = await supabase
           .from("delivery_routes")
           .insert({
@@ -195,10 +215,7 @@ export async function POST(request: Request) {
       });
     } else {
       return NextResponse.json(
-        {
-          error:
-            "Could not generate a route solution. Check GraphHopper error logs in terminal.",
-        },
+        { error: "Could not generate a route solution." },
         { status: 500 }
       );
     }
