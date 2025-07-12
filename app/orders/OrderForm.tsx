@@ -10,7 +10,12 @@ type CartItem = { product_id: string; quantity: number; name: string };
 export function OrderForm({ products }: { products: Product[] }) {
   const router = useRouter();
   const [customerName, setCustomerName] = useState("");
+  // This is now optional, for display/reference only
   const [address, setAddress] = useState("");
+  // --- NEW STATE FOR COORDINATES ---
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState("");
   const [quantity, setQuantity] = useState(1);
@@ -35,13 +40,24 @@ export function OrderForm({ products }: { products: Product[] }) {
       alert("Please add items to the order.");
       return;
     }
+    // Simple validation for lat/lng
+    if (!lat || !lng) {
+      alert("Latitude and Longitude are required.");
+      return;
+    }
     setIsLoading(true);
+
     const res = await fetch("/api/orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         customer_name: customerName,
-        delivery_address: address,
+        delivery_address: address, // Sending the optional text address
+        // --- SENDING THE COORDINATES DIRECTLY ---
+        delivery_location: {
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+        },
         items: cart.map(({ product_id, quantity }) => ({
           product_id,
           quantity,
@@ -71,13 +87,35 @@ export function OrderForm({ products }: { products: Product[] }) {
         required
         className="w-full p-2 border rounded"
       />
+      {/* Optional text address */}
       <input
         value={address}
         onChange={(e) => setAddress(e.target.value)}
-        placeholder="Full Delivery Address*"
-        required
+        placeholder="Delivery Address (e.g., House No, Street)"
         className="w-full p-2 border rounded"
       />
+
+      {/* --- NEW LAT/LNG INPUTS --- */}
+      <div className="flex gap-4">
+        <input
+          type="number"
+          step="any"
+          value={lat}
+          onChange={(e) => setLat(e.target.value)}
+          placeholder="Delivery Latitude*"
+          required
+          className="w-full p-2 border rounded"
+        />
+        <input
+          type="number"
+          step="any"
+          value={lng}
+          onChange={(e) => setLng(e.target.value)}
+          placeholder="Delivery Longitude*"
+          required
+          className="w-full p-2 border rounded"
+        />
+      </div>
 
       <div className="border-t pt-4">
         <h3 className="font-semibold mb-2">Order Items</h3>
