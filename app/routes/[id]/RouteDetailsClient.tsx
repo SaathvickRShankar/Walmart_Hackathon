@@ -42,6 +42,7 @@ export function RouteDetailsClient({ route }: { route: any }) {
           {/* We now pass the prepared data to our dynamic map */}
           <DynamicRouteMap
             routeGeometry={route.route_geometry}
+            trafficSegments={route.traffic_segments}
             startLocation={startLocation}
             stops={stops}
           />

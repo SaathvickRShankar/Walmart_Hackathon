@@ -13,7 +13,12 @@ import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility
 import "leaflet-defaulticon-compatibility";
 import { LatLngExpression } from "leaflet";
 
-export function RouteMap({ routeGeometry, startLocation, stops }: any) {
+export function RouteMap({
+  routeGeometry,
+  trafficSegments,
+  startLocation,
+  stops,
+}: any) {
   if (!startLocation) {
     return (
       <div className="h-[600px] w-full flex items-center justify-center bg-gray-200 rounded-lg">
@@ -22,19 +27,21 @@ export function RouteMap({ routeGeometry, startLocation, stops }: any) {
     );
   }
 
-  // --- FINAL FIX: Directly use the coordinates from the 'points' array ---
   let polyline: LatLngExpression[] = [];
   if (routeGeometry && Array.isArray(routeGeometry)) {
-    // We map over each segment in the 'points' array and extract its coordinates
-    polyline = routeGeometry.flatMap(
-      (segment: any) =>
-        segment.coordinates.map((coord: [number, number]) => [
-          coord[1],
-          coord[0],
-        ]) // Swap [lng, lat] to [lat, lng] for Leaflet
+    polyline = routeGeometry.flatMap((segment: any) =>
+      segment.coordinates.map((coord: [number, number]) => [coord[1], coord[0]])
     );
   }
-  // --- END FINAL FIX ---
+
+  // --- NEW: Prepare the traffic polylines ---
+  let trafficPolylines: LatLngExpression[][] = [];
+  if (trafficSegments && Array.isArray(trafficSegments)) {
+    trafficPolylines = trafficSegments.map(
+      (segment: any) =>
+        segment.map((coord: [number, number]) => [coord[1], coord[0]]) // Swap lng/lat
+    );
+  }
 
   const hasGeometry = polyline.length > 0;
   const mapProps: any = {
@@ -53,15 +60,28 @@ export function RouteMap({ routeGeometry, startLocation, stops }: any) {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       />
+
+      {/* Base route in blue */}
       {hasGeometry && (
         <Polyline
-          pathOptions={{ color: "blue", weight: 5 }}
+          pathOptions={{ color: "blue", weight: 5, opacity: 0.7 }}
           positions={polyline}
         />
       )}
+
+      {/* --- NEW: Render traffic segments on top in red --- */}
+      {trafficPolylines.map((segment, index) => (
+        <Polyline
+          key={index}
+          pathOptions={{ color: "red", weight: 7 }}
+          positions={segment}
+        />
+      ))}
+
       <Marker position={startLocation}>
         <Popup>Warehouse (Start/End)</Popup>
       </Marker>
+
       {stops.map((stop: any) => (
         <Marker key={stop.stop_number} position={stop.location}>
           <Popup>

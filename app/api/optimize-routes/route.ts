@@ -26,6 +26,23 @@ function parseGeoJsonPoint(
   return { lat: geoJson.coordinates[1], lng: geoJson.coordinates[0] };
 }
 
+// --- NEW HELPER FUNCTION TO SIMULATE TRAFFIC ---
+// This function takes the route points and randomly picks a few segments to mark as "congested".
+function simulateTraffic(points: any[]) {
+  if (!points || points.length === 0) return null;
+  const trafficSegments = [];
+  const coordinates = points.flatMap((segment: any) => segment.coordinates);
+
+  // Pick 2 random spots to simulate traffic jams
+  for (let i = 0; i < 2; i++) {
+    if (coordinates.length < 10) continue; // Not enough points for a segment
+    const startIndex = Math.floor(Math.random() * (coordinates.length - 5));
+    const segment = coordinates.slice(startIndex, startIndex + 5);
+    trafficSegments.push(segment);
+  }
+  return trafficSegments.length > 0 ? trafficSegments : null;
+}
+
 export async function POST(request: Request) {
   try {
     // --- (All fetching and validation logic is correct and remains unchanged) ---
@@ -157,8 +174,9 @@ export async function POST(request: Request) {
         routesCreated++;
         const route = solution.solution.routes[0];
 
-        // --- THE FINAL FIX ---
-        // We are now saving `route.points` instead of `route.geometry`
+        // --- SIMULATE AND SAVE TRAFFIC ---
+        const trafficData = simulateTraffic(route.points);
+
         const { data: routeData } = await supabase
           .from("delivery_routes")
           .insert({
@@ -167,10 +185,10 @@ export async function POST(request: Request) {
             route_geometry: route.points,
             total_duration_seconds: route.completion_time,
             total_distance_meters: route.distance,
+            traffic_segments: trafficData, // Save the simulated data
           })
           .select()
           .single();
-        // --- END FINAL FIX ---
 
         if (!routeData) continue;
         const routeId = routeData.id;
